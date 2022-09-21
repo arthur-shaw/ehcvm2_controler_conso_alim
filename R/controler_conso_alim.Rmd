@@ -1,0 +1,416 @@
+---
+title: "Contrôler les données de consommation alimentaire"
+output: 
+    html_document:
+      toc: true
+      toc_float: true
+      toc_depth: 3
+params:
+    base_dir: ""
+    base_alim: ""
+    base_menage: ""
+---
+
+
+```{r, include = FALSE, echo = FALSE, warning = FALSE, message = FALSE}
+#| label: knitr_options
+# knitr options
+knitr::opts_chunk$set(
+	echo = FALSE,
+	warning = FALSE,
+	message = FALSE,
+	out.width = '100%'
+)
+```
+
+```{css}
+h1 {
+    color: #0F2B1D;
+}
+h2 {
+    color: #516A5D;
+}
+```
+
+```{r}
+#| label: set_reactable_theme
+
+# {reactable} table style
+reactable_style <- reactable::reactableTheme(
+    headerStyle = list(color = "#ffffff", background = "#0F2B1D"),
+    groupHeaderStyle = list(color = "#ffffff", background = "#0F2B1D"),
+    stripedColor = "#edfaea",
+    searchInputStyle = list(
+        backgroundColor = "#edfaea",
+        borderColor = "#8cc0a5",
+        borderWidth = "medium",
+        "&:focus" = list(backgroundColor = "#edfaea", borderWidth = "thick", borderColor = "#0F2B1D"),
+        "&:hover, &:focus" = list(borderWidth = "thick", borderColor = "#8cc0a5"),
+        "&:hover::placeholder, &:focus::placeholder" = list(color = "#8cc0a5")            
+    )
+)
+# reactable UI text
+reactable_fr <- reactable::reactableLang(
+    searchPlaceholder = "Rechercher",
+    searchLabel = "Rechercher",
+    noData = "Aucune ligne retrouvée",
+    pageNext = "Suivant",
+    pagePrevious = "Précédent",
+    pageNumbers = "{page} de {pages}",
+    pageInfo = "Lignes {rowStart} à {rowEnd} de {rows} lignes"
+)
+```
+
+```{r}
+#| label: load_data
+
+# load data
+food <- haven::read_dta(file = fs::path(params$base_dir, params$base_alim))
+geo_info <- haven::read_dta(file = fs::path(params$base_dir, params$base_menage)) |>
+    dplyr::select(
+        # standard keys
+        interview__key, interview__id, grappe, vague, 
+        # geographic variables
+        s00q01, # region
+        s00q04, # urban/rural
+        s00q07 # EA
+    )
+
+# create codes for groups
+group_lbls <- c(
+    "Céréales" = 1,
+    "Viandes" = 2,
+    "Poissons" = 3,
+    "Produits laitiers" = 4,
+    "Huiles" = 5,
+    "Fruits" = 6,
+    "Légumes" = 7,
+    "Légumineuses et tubercules" = 8,
+    "Sucreries" = 9,
+    "Condiments" = 10,
+    "Boissons" = 11
+)
+
+# add geo information and create food group identifiers
+food_exp <- food |>
+    dplyr::filter(s07bq02 == 1) |>
+    dplyr::left_join(
+        geo_info,
+        by = c("interview__key", "interview__id", "grappe", "vague")
+    ) |>
+    dplyr::mutate(
+        group = dplyr::case_when(
+            s07bq01 %in% c(1:26, 166, 167, 168, 169) ~ 1, # "céréales",
+            s07bq01 %in% c(27:39, 170, 171) ~ 2, # "viandes",
+            s07bq01 %in% c(40:51, 172, 173) ~ 3, # "poissons",
+            s07bq01 %in% c(52:60, 174) ~ 4, # "produits laitiers",
+            s07bq01 %in% c(61:70, 175) ~ 5, # "huiles",
+            s07bq01 %in% c(71:87, 176) ~ 6, # "fruits",
+            s07bq01 %in% c(88:108, 177) ~ 7, # "légumes",
+            s07bq01 %in% c(109:133, 178) ~ 8, # "légumineuses et tubercules",
+            s07bq01 %in% c(134:138) ~ 9, # "sucreries",
+            s07bq01 %in% c(139:154, 179) ~ 10, # "condiments",
+            s07bq01 %in% c(155:165, 180, 181) ~ 11 # "boissons"
+        )
+    ) |>
+    labelled::set_value_labels(group = group_lbls)
+```
+
+# Unités par grand groupe
+<!-- 
+
+- Select group
+- Deselect food items
+- Show counts by unit (where unit shows "[{value}] {label}")
+- Inspect cases in each count bin
+    - Interview link
+    - Food item 
+
+-->
+
+```{r}
+#| label: units_by_group
+units_by_group_conso <- food_exp |>
+    dplyr::filter(s07bq03a > 0) |>
+    dplyr::mutate(
+        group = haven::as_factor(group, levels = "both"),
+        s07bq03b = haven::as_factor(s07bq03b, levels = "both")
+    ) |>
+    dplyr::group_by(group) |> 
+    dplyr::count(s07bq03b) |>
+    dplyr::arrange(dplyr::desc(n), .by_group = TRUE) |>
+    dplyr::ungroup()
+    
+# units_by_group_conso |>
+# gt::gt()
+
+library(crosstalk)
+
+units_by_group_conso_shared <- crosstalk::SharedData$new(units_by_group_conso)
+
+# units_by_group_purch <- food_exp |>
+#     dplyr::filter(s07bq07a > 0) |>
+#     dplyr::mutate(
+#         group = haven::as_factor(group, levels = "both"),
+#         s07bq07b = haven::as_factor(s07bq07b, levels = "both")
+#     ) |>
+#     dplyr::group_by(group) |> 
+#     dplyr::count(s07bq07b) |>
+#     dplyr::arrange(dplyr::desc(n), .by_group = TRUE)
+
+# units_by_group_purch |>
+# gt::gt()
+
+shiny::fluidRow(
+    shiny::column(
+        4,
+        crosstalk::filter_select("groupe", "Groupe", units_by_group_conso_shared, ~group)
+    ),
+    shiny::column(
+        8, 
+        reactable::reactable(
+            data = units_by_group_conso_shared,
+            columns = list(
+                group = reactable::colDef(name = "Groupe"),
+                s07bq03b = reactable::colDef(name = "Unité"),
+                n = reactable::colDef(name = "Nombre")
+            ), 
+            striped = TRUE,
+            theme = reactable_style,
+            language = reactable_fr             
+        )
+    )
+)
+
+
+
+```
+
+
+# Désaccord entre unités de consommation et d'achat
+
+```{r}
+#| label: conso_purch_differ
+
+# unit-size not the same
+# {s07bq03b, s07bq03c} != {s07bq07b, s07bq07c}
+
+# unit not the same
+# s07bq03b != s07bq07c
+
+mismatched_units <- food_exp |>
+    dplyr::filter(
+        # both consumption and purchase units declared
+        (!is.na(s07bq03b) & !is.na(s07bq07c)) 
+        &
+        # those units are different
+        (s07bq03b != s07bq07b)
+    ) |>
+    dplyr::select(
+        interview__id, s07bq01, 
+        # consumption
+        s07bq03a, s07bq03b, s07bq03c, # quantity, unit, size
+        s07bq07a, s07bq07b, s07bq07c
+    ) |>
+    dplyr::mutate(
+        dplyr::across(
+            .cols = c(s07bq01, s07bq03b, s07bq03c, s07bq07b, s07bq07c),
+            .fns = ~ haven::as_factor(.x, levels = "both")
+        )
+    )
+
+
+
+mismatched_units_shared <- crosstalk::SharedData$new(mismatched_units)
+
+shiny::fluidRow(
+    filter_select("produit", "Produit", mismatched_units_shared, ~s07bq01),
+    reactable::reactable(
+        data = mismatched_units_shared,
+        columns = list(
+            s07bq03a = reactable::colDef(name = "Quantité"),
+            s07bq03b = reactable::colDef(name = "Unité"),
+            s07bq03c = reactable::colDef(name = "Taille"),
+            s07bq07a = reactable::colDef(name = "Quantité"),
+            s07bq07b = reactable::colDef(name = "Unité"),
+            s07bq07c = reactable::colDef(name = "Taille")
+        ),
+        columnGroups = list(
+            reactable::colGroup(name = "Consommation", columns = c("s07bq03a", "s07bq03b", "s07bq03c")),
+            reactable::colGroup(name = "Achat", columns = c("s07bq07a", "s07bq07b", "s07bq07c"))
+        ),
+        striped = TRUE,
+        theme = reactable_style,
+        language = reactable_fr 
+    )
+)
+
+
+```
+
+# Réponses autres
+<!-- 
+
+- Select group
+- See table of response options
+    - Searchable to identify shared substrings
+    - With links back to cases to explore further
+    
+ -->
+
+```{r}
+#| label: other_products
+produits_autre <- food_exp |>
+    dplyr::filter(!s07bq02_autre %in% c(NA_character_, "")) |>
+    dplyr::mutate(
+        dplyr::across(
+            .cols = c(group, s07bq01),
+            .fns = ~ haven::as_factor(.x, levels = "both")
+        )
+    ) |>
+    dplyr::select(interview__id, group, s07bq01, s07bq02_autre)
+
+produits_autre_shared <- crosstalk::SharedData$new(produits_autre)
+
+shiny::fluidRow(
+    shiny::column(
+        4,
+        filter_select("autre_groupe", "Groupe", produits_autre_shared, ~group),
+    ),
+    shiny::column(
+        8,
+        reactable::reactable(
+            data = produits_autre_shared,
+            columns = list(
+                group = reactable::colDef(name = "Groupe"),
+                s07bq01 = reactable::colDef(name = "Produit"),
+                s07bq02_autre = reactable::colDef(name = "Réponse autre")
+            ),
+            filterable = TRUE,
+            striped = TRUE,
+            theme = reactable_style,
+            language = reactable_fr 
+        )
+    )
+)
+```
+
+
+# Valeurs anormales
+
+<!-- 
+- Calculate unit price
+- Choose stratum
+- Choose food(s) (if any)
+- Choose method
+    - Percentile
+    - SD
+- Choose threshold
+    - Percentile (e.g. 1st and 99th)
+    - SD (e.g., 2, 3)
+- Show extreme values
+ -->
+
+```{r}
+#| label: valeurs_extremes
+prices <- food_exp |>
+    # filter to where purchase made
+    dplyr::filter(s07bq06 %in% c(1, 2, 3)) |>
+    # calculate unit price
+    dplyr::mutate(
+        # total price / quantity
+        unit_price = s07bq08 / s07bq07a 
+    )
+
+price_stats <- prices |>
+    dplyr::group_by(
+        # item-unit
+        s07bq01, s07bq07b, s07bq07c,
+        # strata
+        s00q01, s00q04
+    ) |>
+    dplyr::summarize(
+        n_obs = dplyr::n(),
+        val_median = median(unit_price, na.rm = TRUE),
+        val_sd = sd(unit_price, na.rm = TRUE),
+        val_99tile = quantile(unit_price, 0.99, names = FALSE, na.rm = TRUE),
+        val_1tile = quantile(unit_price, 0.01, names = FALSE, na.rm = TRUE)
+    ) |>
+    dplyr::ungroup() |>
+    dplyr::mutate(
+        val_2sd_upper = val_median + (2 * val_sd),
+        val_2sd_lower = val_median - (2 * val_sd)
+    )
+
+prices_extreme <- prices |>
+    dplyr::left_join(
+        y = price_stats,
+        by = c("s07bq01", "s07bq07b", "s07bq07c", "s00q01", "s00q04") 
+    ) |>
+    dplyr::filter(unit_price < val_1tile | unit_price > val_99tile) |>
+    dplyr::select(
+        # interview ID
+        interview__id, s00q01, s00q04,
+        # product ID
+        group, s07bq01, 
+        # statistics
+        unit_price, n_obs, val_1tile, val_99tile,
+        # product details
+        s07bq06, s07bq07a, s07bq07b, s07bq07c, s07bq08
+    ) |>
+    dplyr::mutate(
+        dplyr::across(
+            .cols = c(s00q01, s00q04, group, s07bq01, s07bq06, s07bq07b, s07bq07c),
+            .fns = ~ haven::as_factor(.x, levels = "both")
+        )
+    ) |>
+    dplyr::filter(n_obs >= 5)
+
+prices_extreme_shared <- crosstalk::SharedData$new(prices_extreme)
+
+shiny::fluidRow(
+    filter_select("produit", "Produit", prices_extreme_shared, ~s07bq01),
+    reactable::reactable(
+        data = prices_extreme_shared,
+        columns = list(
+            s00q01 = reactable::colDef(name = "Région"),
+            s00q04 = reactable::colDef(name = "Milieu"),
+            group = reactable::colDef(name = "Groupe"),
+            s07bq01 = reactable::colDef(name = "Produit"),
+            unit_price = reactable::colDef(
+                name = "Prix unitaire", 
+                maxWidth = 75,
+                format = reactable::colFormat(digits = 2)
+            ),
+            n_obs = reactable::colDef(name = "N. obs", maxWidth = 75),
+            val_1tile = reactable::colDef(name = "1%", format = reactable::colFormat(digits = 2)),
+            val_99tile = reactable::colDef(name = "99%", format = reactable::colFormat(digits = 2)),
+            s07bq06 = reactable::colDef(name = "Quand acheté"),
+            s07bq07a = reactable::colDef(name = "Quantité", maxWidth = 75),
+            s07bq07b = reactable::colDef(name = "Unité"),
+            s07bq07c = reactable::colDef(name = "Taille"),
+            s07bq08 = reactable::colDef(name = "Dépense totale")
+        ),
+        columnGroups = list(
+            reactable::colGroup(
+                name = "Identifiants",
+                columns = c("interview__id", "s00q01", "s00q04", "group", "s07bq01")
+            ),
+            reactable::colGroup(
+                name = "Statistiques",
+                columns = c("unit_price", "n_obs", "val_1tile", "val_99tile")
+            ),
+            reactable::colGroup(
+                name = "Détails",
+                columns = c("s07bq06", "s07bq07a", "s07bq07b", "s07bq07c", "s07bq08")
+            )
+        ),
+        striped = TRUE,
+        theme = reactable_style,
+        language = reactable_fr 
+    )
+)
+
+
+
+```
